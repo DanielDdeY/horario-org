@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Puerto JSON del motor de horarios",
+  "$comment": "status: borrador. Pendiente de acuerdo entre M1 y M2.",
+  "oneOf": [
+    { "$ref": "#/$defs/entrada" },
+    { "$ref": "#/$defs/salidaUnica" },
+    { "$ref": "#/$defs/salidaVersiones" },
+    { "$ref": "#/$defs/salidaTimeout" },
+    { "$ref": "#/$defs/salidaError" }
+  ],
+  "$defs": {
+    "id": { "type": "integer", "minimum": 1 },
+    "cantidad": { "type": "integer", "minimum": 0 },
+    "dia": { "type": "integer", "minimum": 1, "maximum": 7 },
+    "inicio": { "type": "integer", "minimum": 0, "maximum": 1439 },
+    "fin": { "type": "integer", "minimum": 1, "maximum": 1440 },
+    "version": { "const": 1 },
+    "estadoExistoso": { "enum": ["optimo", "factible"] },
+    "intervalo": {
+      "type": "object",
+      "properties": {
+        "inicioMin": { "$ref": "#/$defs/inicio" },
+        "finMin": { "$ref": "#/$defs/fin" }
+      },
+      "required": ["inicioMin", "finMin"],
+      "additionalProperties": false
+    },
+    "pesos": {
+      "type": "object",
+      "properties": {
+        "hueco": { "$ref": "#/$defs/cantidad" },
+        "piso": { "$ref": "#/$defs/cantidad" },
+        "edificio": { "$ref": "#/$defs/cantidad" },
+        "estabilidad": { "$ref": "#/$defs/cantidad" }
+      },
+      "required": ["hueco", "piso", "edificio", "estabilidad"],
+      "additionalProperties": false
+    },
+    "config": {
+      "type": "object",
+      "properties": {
+        "dias": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/dia" } },
+        "inicioDiaMin": { "$ref": "#/$defs/inicio" },
+        "finDiaMin": { "$ref": "#/$defs/fin" },
+        "turnoMin": { "enum": [45, 50, 60, 90] },
+        "recesos": { "type": "array", "items": { "$ref": "#/$defs/intervalo" } },
+        "pesos": { "$ref": "#/$defs/pesos" },
+        "toleranciaHuecoMin": { "$ref": "#/$defs/cantidad" },
+        "consecutivoMaxMin": { "$ref": "#/$defs/cantidad" },
+        "timeoutSeg": { "$ref": "#/$defs/id" }
+      },
+      "required": ["dias", "inicioDiaMin", "finDiaMin", "turnoMin", "recesos", "pesos", "toleranciaHuecoMin", "consecutivoMaxMin", "timeoutSeg"],
+      "additionalProperties": false
+    },
+    "profesor": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "cursosAptos": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }
+      },
+      "required": ["id", "cursosAptos"],
+      "additionalProperties": false
+    },
+    "disponibilidad": {
+      "type": "object",
+      "properties": {
+        "profesorId": { "$ref": "#/$defs/id" },
+        "cursoId": { "$ref": "#/$defs/id" },
+        "dia": { "$ref": "#/$defs/dia" },
+        "inicioMin": { "$ref": "#/$defs/inicio" },
+        "finMin": { "$ref": "#/$defs/fin" }
+      },
+      "required": ["profesorId", "cursoId", "dia", "inicioMin", "finMin"],
+      "additionalProperties": false
+    },
+    "aula": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "capacidad": { "$ref": "#/$defs/cantidad" },
+        "edificio": { "$ref": "#/$defs/id" },
+        "piso": { "type": "integer" },
+        "tipo": { "$ref": "#/$defs/id" }
+      },
+      "required": ["id", "capacidad", "edificio", "piso", "tipo"],
+      "additionalProperties": false
+    },
+    "sesion": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "cursoId": { "$ref": "#/$defs/id" },
+        "seccionId": { "$ref": "#/$defs/id" },
+        "duracionMin": { "type": "integer", "minimum": 1, "maximum": 1440 },
+        "matriculados": { "$ref": "#/$defs/cantidad" },
+        "tipoAula": { "$ref": "#/$defs/id" },
+        "grupos": { "type": "array", "items": { "$ref": "#/$defs/id" } }
+      },
+      "required": ["id", "cursoId", "seccionId", "duracionMin", "matriculados", "tipoAula", "grupos"],
+      "additionalProperties": false
+    },
+    "asignacion": {
+      "type": "object",
+      "properties": {
+        "sesionId": { "$ref": "#/$defs/id" },
+        "profesorId": { "$ref": "#/$defs/id" },
+        "aulaId": { "$ref": "#/$defs/id" },
+        "dia": { "$ref": "#/$defs/dia" },
+        "inicioMin": { "$ref": "#/$defs/inicio" }
+      },
+      "required": ["sesionId", "profesorId", "aulaId", "dia", "inicioMin"],
+      "additionalProperties": false
+    },
+    "fija": {
+      "type": "object",
+      "properties": {
+        "sesionId": { "$ref": "#/$defs/id" },
+        "profesorId": { "$ref": "#/$defs/id" },
+        "aulaId": { "$ref": "#/$defs/id" },
+        "dia": { "$ref": "#/$defs/dia" },
+        "inicioMin": { "$ref": "#/$defs/inicio" },
+        "obligatoria": { "type": "boolean" }
+      },
+      "required": ["sesionId", "obligatoria"],
+      "if": { "properties": { "obligatoria": { "const": true } } },
+      "then": { "required": ["profesorId", "aulaId", "dia", "inicioMin"] },
+      "additionalProperties": false
+    },
+    "entrada": {
+      "type": "object",
+      "properties": {
+        "version": { "$ref": "#/$defs/version" },
+        "config": { "$ref": "#/$defs/config" },
+        "profesores": { "type": "array", "items": { "$ref": "#/$defs/profesor" } },
+        "disponibilidades": { "type": "array", "items": { "$ref": "#/$defs/disponibilidad" } },
+        "aulas": { "type": "array", "items": { "$ref": "#/$defs/aula" } },
+        "sesiones": { "type": "array", "items": { "$ref": "#/$defs/sesion" } },
+        "fijas": { "type": "array", "items": { "$ref": "#/$defs/fija" } },
+        "previas": { "type": "array", "items": { "$ref": "#/$defs/asignacion" } },
+        "maxVersiones": { "type": "integer", "minimum": 1, "maximum": 4 }
+      },
+      "required": ["version", "config", "profesores", "disponibilidades", "aulas", "sesiones", "fijas", "previas", "maxVersiones"],
+      "additionalProperties": false
+    },
+    "solucion": {
+      "type": "object",
+      "properties": {
+        "estado": { "$ref": "#/$defs/estadoExistoso" },
+        "costo": { "$ref": "#/$defs/cantidad" },
+        "asignaciones": { "type": "array", "items": { "$ref": "#/$defs/asignacion" } },
+        "sinAsignar": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }
+      },
+      "required": ["costo", "asignaciones", "sinAsignar"],
+      "additionalProperties": false
+    },
+    "salidaUnica": {
+      "type": "object",
+      "properties": {
+        "version": { "$ref": "#/$defs/version" },
+        "estado": { "$ref": "#/$defs/estadoExistoso" },
+        "tiempoMs": { "$ref": "#/$defs/cantidad" },
+        "costo": { "$ref": "#/$defs/cantidad" },
+        "asignaciones": { "type": "array", "items": { "$ref": "#/$defs/asignacion" } },
+        "sinAsignar": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }
+      },
+      "required": ["version", "estado", "tiempoMs", "costo", "asignaciones", "sinAsignar"],
+      "additionalProperties": false
+    },
+    "salidaVersiones": {
+      "type": "object",
+      "properties": {
+        "version": { "$ref": "#/$defs/version" },
+        "estado": { "$ref": "#/$defs/estadoExistoso" },
+        "tiempoMs": { "$ref": "#/$defs/cantidad" },
+        "versiones": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "$ref": "#/$defs/solucion" } }
+      },
+      "required": ["version", "estado", "tiempoMs", "versiones"],
+      "additionalProperties": false
+    },
+    "salidaTimeout": {
+      "type": "object",
+      "properties": {
+        "version": { "$ref": "#/$defs/version" },
+        "estado": { "const": "timeout" },
+        "tiempoMs": { "$ref": "#/$defs/cantidad" }
+      },
+      "required": ["version", "estado", "tiempoMs"],
+      "additionalProperties": false
+    },
+    "salidaError": {
+      "type": "object",
+      "properties": {
+        "version": { "$ref": "#/$defs/version" },
+        "estado": { "const": "error" },
+        "mensaje": { "type": "string" }
+      },
+      "required": ["version", "estado", "mensaje"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -144,7 +144,11 @@ data Asignacion = Asignacion
 data NumeroVersion = Version1 | Version2 | Version3 | Version4
   deriving (Eq, Ord, Show)
 
-data OrigenHorario = HorarioManual | HorarioGenerado NumeroVersion
+data OrigenHorario
+  = HorarioManual
+  | HorarioGenerado NumeroVersion
+  | HorarioRegenerado NumeroVersion PoliticaCambios
+  | HorarioCompletado NumeroVersion
   deriving (Eq, Show)
 
 data EstadoHorario = Borrador | Publicado
