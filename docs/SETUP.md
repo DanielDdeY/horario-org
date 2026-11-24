@@ -49,10 +49,17 @@ Todas son opcionales salvo las del coordinador inicial, que se necesitan la prim
 | `HORARIO_BCRYPT_COSTO` | `10` | Costo de bcrypt |
 | `HORARIO_MAX_TRABAJOS` | `2` | Trabajos de generación concurrentes |
 | `HORARIO_SWIPL` | `swipl` | Ejecutable de SWI-Prolog |
-| `HORARIO_MOTOR_ARGS` | vacío | Argumentos de `swipl`, separados por espacios. **Pendiente de M1** (comando exacto) |
-| `HORARIO_MOTOR_DIR` | directorio actual | Directorio de trabajo del motor. **Pendiente de M1** |
+| `HORARIO_MOTOR_ARGS` | vacío | Para el motor de M1, usar `-q -s motor/main.pl` |
+| `HORARIO_MOTOR_DIR` | directorio actual | Para esos argumentos, usar la ruta absoluta a la raíz de `horario-org` |
 | `HORARIO_MAX_TIMEOUT_SEG` | `300` | Tope de `timeoutSeg` que se envía al motor |
 | `HORARIO_MARGEN_TIMEOUT_MS` | `2000` | Margen antes de matar `swipl` |
+
+Desde la raíz del repositorio, puedes probar el motor en PowerShell con el
+ejemplo del contrato. El proceso lee un JSON por stdin y devuelve otro por stdout.
+
+```powershell
+Get-Content -Raw contracts/ejemplos/m2_versiones_entrada.json | swipl -q -s motor/main.pl
+```
 
 ## 4. Levantar la API
 
