@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "config": {
+    "dias": [
+      1
+    ],
+    "inicioDiaMin": 480,
+    "finDiaMin": 600,
+    "turnoMin": 60,
+    "recesos": [],
+    "pesos": {
+      "hueco": 1,
+      "piso": 2,
+      "edificio": 10,
+      "estabilidad": 5
+    },
+    "toleranciaHuecoMin": 0,
+    "consecutivoMaxMin": 30,
+    "timeoutSeg": 5
+  },
+  "profesores": [
+    {
+      "id": 1,
+      "cursosAptos": [
+        10
+      ]
+    }
+  ],
+  "disponibilidades": [
+    {
+      "profesorId": 1,
+      "cursoId": 10,
+      "dia": 1,
+      "inicioMin": 480,
+      "finMin": 600
+    }
+  ],
+  "aulas": [
+    {
+      "id": 301,
+      "capacidad": 40,
+      "edificio": 1,
+      "piso": 3,
+      "tipo": 1
+    }
+  ],
+  "sesiones": [
+    {
+      "id": 5001,
+      "cursoId": 10,
+      "seccionId": 900,
+      "duracionMin": 60,
+      "matriculados": 35,
+      "tipoAula": 1,
+      "grupos": [
+        7
+      ]
+    }
+  ],
+  "fijas": [
+    {
+      "sesionId": 5001,
+      "inicioMin": 481,
+      "obligatoria": false
+    }
+  ],
+  "previas": [],
+  "maxVersiones": 2
+}
