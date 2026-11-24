@@ -18,6 +18,19 @@ library
     UseCases.Docentes
     Adapters.Prolog.JSON
     Adapters.Prolog.Proceso
+    Adapters.Sqlite.Conexion
+    Adapters.Sqlite.Migraciones
+    Adapters.Sqlite.Codificacion
+    Adapters.Sqlite.Repositorio
+    Adapters.Sqlite.Administracion
+    Adapters.Sqlite.Usuarios
+    Adapters.Sqlite.Trabajos
+    Adapters.Api.Json
+    Adapters.Api.Errores
+    Adapters.Api.Autenticacion
+    Adapters.Api.Trabajos
+    Adapters.Api.Servidor
+    Adapters.Api.Configuracion
   build-depends:
     aeson >= 2.2 && < 3,
     async >= 2.2 && < 2.3,
@@ -27,5 +40,52 @@ library
     process >= 1.6 && < 1.7,
     transformers >= 0.6 && < 0.7,
     text >= 2.1 && < 3
+    , base16-bytestring
+    , crypton
+    , direct-sqlite
+    , directory
+    , filepath
+    , http-types
+    , memory
+    , scotty
+    , sqlite-simple
+    , stm
+    , time
+    , wai
+    , warp
   default-language: GHC2021
   ghc-options:      -Wall
+
+executable horario-servidor
+  hs-source-dirs:   app
+  main-is:          Main.hs
+  build-depends:
+    base,
+    horario-org,
+    text,
+    warp
+  default-language: GHC2021
+  ghc-options:      -Wall -threaded -rtsopts
+
+test-suite pruebas-m3
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   app/pruebas, test
+  main-is:          PruebasM3.hs
+  other-modules:    Dobles
+  build-depends:
+    aeson,
+    base,
+    bytestring,
+    containers,
+    directory,
+    filepath,
+    hspec,
+    horario-org,
+    http-types,
+    text,
+    transformers,
+    wai,
+    wai-extra,
+    yaml
+  default-language: GHC2021
+  ghc-options:      -Wall -threaded
