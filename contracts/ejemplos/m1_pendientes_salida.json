@@ -1,0 +1,15 @@
+{
+  "estado": "optimo",
+  "tiempoMs": 0,
+  "version": 1,
+  "versiones": [
+    {
+      "asignaciones": [],
+      "costo": 0,
+      "estado": "optimo",
+      "sinAsignar": [
+        5001
+      ]
+    }
+  ]
+}
