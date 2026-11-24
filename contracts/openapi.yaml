@@ -1,0 +1,1561 @@
+openapi: 3.0.3
+info:
+  title: API del sistema de asignación de horarios
+  version: 0.1.0
+  x-status: borrador
+  description: |
+    status: borrador. Dueño: M3. Lo consumen M4 y M5 para generar sus tipos de TypeScript.
+
+    Fuentes: `docs/ANTES_DE_DESARROLLAR.md` (prioritaria), `DISENO_v3.md`, `contracts/reglas.md`
+    y los reportes de M2 en `docs/cambios/`.
+
+    Convenciones:
+    - Tiempo en minutos desde medianoche (0 a 1440). Intervalos semiabiertos `[inicio, fin)`.
+    - Días: 1 = lunes, ..., 7 = domingo. IDs enteros positivos.
+    - JSON en camelCase y UTF-8. Toda respuesta exitosa con cuerpo es un objeto con `version: 1`.
+      En los cuerpos de entrada `version` es opcional; si viene, debe valer 1.
+    - Los errores siempre usan el esquema `Error`: `{ codigo, mensaje, detalles }`.
+    - Autenticación con `Authorization: Bearer <token>` obtenido en `POST /auth/login`.
+      Roles: `profesor` y `coordinador`. Los borradores no son visibles para el rol profesor.
+    - H10 está retirado (sin `limites` de carga). Las reglas vigentes son H01 a H09, S01, S02 y S07.
+servers:
+  - url: http://localhost:8080
+    description: Servidor local (`make dev`)
+security:
+  - bearerAuth: []
+tags:
+  - name: autenticacion
+  - name: profesores
+  - name: categorias
+  - name: aulas
+  - name: cursos
+  - name: configuracion
+  - name: horarios
+  - name: trabajos
+  - name: avisos
+
+paths:
+  /auth/login:
+    post:
+      tags: [autenticacion]
+      summary: Inicia sesión y devuelve un token con expiración
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginSolicitud' }
+            example: { usuario: coordinador, contrasena: '********' }
+      responses:
+        '200':
+          description: Token emitido
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginRespuesta' }
+              example:
+                version: 1
+                token: 3f6c1d0a9b2e4f7a8c5d6e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b
+                rol: coordinador
+                profesorId: null
+                expiraEn: '2026-11-24T06:00:00Z'
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /profesores:
+    get:
+      tags: [profesores]
+      summary: Lista los profesores (coordinador)
+      responses:
+        '200':
+          description: Profesores
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListaProfesores' }
+              example:
+                version: 1
+                profesores:
+                  - { id: 1, nombre: Ana Torres, categoriaId: 1, cursosAptos: [10, 11], usuario: atorres }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+    post:
+      tags: [profesores]
+      summary: Crea un profesor y, opcionalmente, su usuario (coordinador)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProfesorEntrada' }
+            example: { nombre: Ana Torres, categoriaId: 1, cursosAptos: [10], usuario: atorres, contrasena: '********' }
+      responses:
+        '201':
+          description: Profesor creado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProfesorRespuesta' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+        '422': { $ref: '#/components/responses/EntradaInvalida' }
+
+  /profesores/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [profesores]
+      summary: Datos, disponibilidad, cursos aptos y propuestas del profesor
+      description: El profesor solo puede consultar su propio recurso; el coordinador, cualquiera.
+      parameters:
+        - $ref: '#/components/parameters/PeriodoIdOpcional'
+      responses:
+        '200':
+          description: Detalle del profesor para el período
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProfesorDetalle' }
+              example:
+                version: 1
+                id: 1
+                nombre: Ana Torres
+                categoriaId: 1
+                cursosAptos: [10]
+                usuario: atorres
+                periodoId: 20261
+                disponibilidad:
+                  - { dia: 1, inicioMin: 480, finMin: 720 }
+                propuestas:
+                  - { id: 7, profesorId: 1, cursoId: 10, periodoId: 20261, estado: aprobado, franjas: [{ dia: 1, inicioMin: 480, finMin: 680 }] }
+                avisosGenerados: []
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    put:
+      tags: [profesores]
+      summary: Actualiza el profesor
+      description: |
+        - El coordinador puede cambiar `nombre`, `categoriaId`, `cursosAptos` y `contrasena`.
+        - El profesor solo puede cambiar su propia `disponibilidad` del período indicado.
+          Las franjas que se solapan o se tocan se fusionan al guardar. Si una clase publicada queda fuera
+          de la nueva disponibilidad, la clase se conserva y se generan avisos (`avisosGenerados`).
+        - Enviar un campo que el rol no puede modificar responde 403.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProfesorActualizacion' }
+            examples:
+              disponibilidad:
+                value: { periodoId: 20261, disponibilidad: [{ dia: 1, inicioMin: 480, finMin: 600 }, { dia: 1, inicioMin: 600, finMin: 720 }] }
+              datos:
+                value: { nombre: Ana Torres Ruiz, cursosAptos: [10, 11] }
+      responses:
+        '200':
+          description: Profesor actualizado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProfesorDetalle' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+        '422': { $ref: '#/components/responses/EntradaInvalida' }
+    delete:
+      tags: [profesores]
+      summary: Borra un profesor sin asignaciones (coordinador)
+      responses:
+        '204': { description: Borrado }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+  /profesores/{id}/propuestas:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [profesores]
+      summary: El profesor propone un horario para un curso de su categoría
+      description: Solo el propio profesor. La propuesta queda `propuesto` y fuera de la generación hasta su aprobación.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PropuestaEntrada' }
+            example: { cursoId: 11, periodoId: 20261, franjas: [{ dia: 2, inicioMin: 480, finMin: 680 }] }
+      responses:
+        '201':
+          description: Propuesta registrada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PropuestaRespuesta' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '422': { $ref: '#/components/responses/EntradaInvalida' }
+
+  /propuestas:
+    get:
+      tags: [profesores]
+      summary: Lista propuestas y horarios docentes aprobados (coordinador)
+      parameters:
+        - $ref: '#/components/parameters/PeriodoIdFiltro'
+        - name: estado
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/EstadoPropuesta' }
+      responses:
+        '200':
+          description: Propuestas
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListaPropuestas' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+
+  /propuestas/{id}/aprobar:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [profesores]
+      summary: Aprueba una propuesta pendiente y habilita al profesor para el curso (coordinador)
+      responses:
+        '200':
+          description: Horario docente aprobado (reemplaza al aprobado anterior del mismo curso y período)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PropuestaRespuesta' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+        '422': { $ref: '#/components/responses/EntradaInvalida' }
+
+  /categorias:
+    get:
+      tags: [categorias]
+      summary: Lista las categorías (cualquier rol autenticado)
+      responses:
+        '200':
+          description: Categorías
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListaCategorias' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+    post:
+      tags: [categorias]
+      summary: Crea una categoría (coordinador)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoriaEntrada' }
+            example: { nombre: Ciencias básicas }
+      responses:
+        '201':
+          description: Categoría creada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CategoriaRespuesta' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+  /categorias/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    put:
+      tags: [categorias]
+      summary: Renombra una categoría (coordinador)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoriaEntrada' }
+      responses:
+        '200':
+          description: Categoría actualizada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CategoriaRespuesta' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+    delete:
+      tags: [categorias]
+      summary: Borra una categoría sin profesores ni cursos (coordinador)
+      responses:
+        '204': { description: Borrada }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+  /aulas:
+    get:
+      tags: [aulas]
+      summary: Lista las aulas (coordinador)
+      responses:
+        '200':
+          description: Aulas
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListaAulas' }
+              example:
+                version: 1
+                aulas:
+                  - { id: 301, codigo: A-301, capacidad: 40, edificio: A, piso: 3, tipo: teoria }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+    post:
+      tags: [aulas]
+      summary: Crea un aula (coordinador)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AulaEntrada' }
+            example: { codigo: A-301, capacidad: 40, edificio: A, piso: 3, tipo: teoria }
+      responses:
+        '201':
+          description: Aula creada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AulaRespuesta' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+  /aulas/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    put:
+      tags: [aulas]
+      summary: Reemplaza los datos de un aula (coordinador)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AulaEntrada' }
+      responses:
+        '200':
+          description: Aula actualizada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AulaRespuesta' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+    delete:
+      tags: [aulas]
+      summary: Borra un aula sin asignaciones (coordinador)
+      responses:
+        '204': { description: Borrada }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+  /cursos:
+    get:
+      tags: [cursos]
+      summary: Lista cursos
+      description: El coordinador ve todos. El profesor ve solo los cursos de su categoría.
+      responses:
+        '200':
+          description: Cursos
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListaCursos' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+    post:
+      tags: [cursos]
+      summary: Crea un curso (coordinador)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CursoEntrada' }
+            example: { codigo: MAT101, nombre: Cálculo I, categoriaId: 1 }
+      responses:
+        '201':
+          description: Curso creado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CursoRespuesta' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+  /cursos/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    put:
+      tags: [cursos]
+      summary: Reemplaza los datos de un curso (coordinador)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CursoEntrada' }
+      responses:
+        '200':
+          description: Curso actualizado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CursoRespuesta' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+    delete:
+      tags: [cursos]
+      summary: Borra un curso sin secciones ni habilitaciones (coordinador)
+      responses:
+        '204': { description: Borrado }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+  /cursos/{id}/secciones:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [cursos]
+      summary: Lista las secciones del curso con sus sesiones y grupos (coordinador)
+      parameters:
+        - $ref: '#/components/parameters/PeriodoIdFiltro'
+      responses:
+        '200':
+          description: Secciones
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListaSecciones' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    post:
+      tags: [cursos]
+      summary: Crea una sección del curso con sus sesiones (coordinador)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SeccionEntrada' }
+            example:
+              periodoId: 20261
+              codigo: MAT101-A
+              matriculados: 35
+              grupos: [7]
+              sesiones:
+                - { duracionMin: 100, tipoAula: teoria }
+                - { duracionMin: 100, tipoAula: laboratorio }
+      responses:
+        '201':
+          description: Sección creada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeccionRespuesta' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+  /cursos/{id}/secciones/{seccionId}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - name: seccionId
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    put:
+      tags: [cursos]
+      summary: Reemplaza la sección y su lista de sesiones (coordinador)
+      description: |
+        Las sesiones con `id` se actualizan; las que no traen `id` se crean (abiertas, quedan pendientes en los horarios).
+        Una sesión existente que no aparece en la lista se borra solo si ningún horario la usa; si no, responde 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SeccionEntrada' }
+      responses:
+        '200':
+          description: Sección actualizada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeccionRespuesta' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+    delete:
+      tags: [cursos]
+      summary: Borra una sección cuyas sesiones no usa ningún horario (coordinador)
+      responses:
+        '204': { description: Borrada }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+
+  /sesiones/{id}/cerrar:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [cursos]
+      summary: Cierra una sesión y la retira de todos los horarios del período, incluido el publicado (coordinador)
+      responses:
+        '204': { description: Sesión cerrada }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '422': { $ref: '#/components/responses/EntradaInvalida' }
+
+  /configuracion:
+    get:
+      tags: [configuracion]
+      summary: Jornada, turno, recesos y pesos del período (coordinador)
+      description: Sin `periodoId` devuelve la configuración del período más reciente (mayor `periodoId`).
+      parameters:
+        - $ref: '#/components/parameters/PeriodoIdOpcional'
+      responses:
+        '200':
+          description: Configuración
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfiguracionRespuesta' }
+              example:
+                version: 1
+                periodoId: 20261
+                diasActivos: [1, 2, 3, 4, 5]
+                inicioDiaMin: 480
+                finDiaMin: 1230
+                turnoMin: 50
+                recesos: []
+                pesos: { hueco: 1, piso: 2, edificio: 10, estabilidad: 5 }
+                toleranciaHuecoMin: 0
+                consecutivoMaxMin: 30
+                timeoutSeg: 60
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    put:
+      tags: [configuracion]
+      summary: Crea o reemplaza la configuración del período de `periodoId` (coordinador)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Configuracion' }
+      responses:
+        '200':
+          description: Configuración guardada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfiguracionRespuesta' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+
+  /horarios:
+    get:
+      tags: [horarios]
+      summary: Lista horarios
+      description: El coordinador ve borradores y publicados. El profesor solo ve horarios publicados.
+      parameters:
+        - $ref: '#/components/parameters/PeriodoIdFiltro'
+        - name: estado
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/EstadoHorario' }
+      responses:
+        '200':
+          description: Horarios
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListaHorarios' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+    post:
+      tags: [horarios]
+      summary: Crea un horario vacío en borrador (coordinador)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HorarioVacioEntrada' }
+            example: { periodoId: 20261 }
+      responses:
+        '201':
+          description: Horario creado; todas las sesiones abiertas quedan en `sinAsignar`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HorarioDetalle' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '422': { $ref: '#/components/responses/EntradaInvalida' }
+
+  /horarios/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [horarios]
+      summary: Detalle del horario con sin asignar y motivos, violaciones, puntaje desglosado y alertas
+      description: El profesor solo puede consultar horarios publicados.
+      responses:
+        '200':
+          description: Detalle
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HorarioDetalle' }
+              example:
+                version: 1
+                id: 12
+                periodoId: 20261
+                estado: borrador
+                origen: generado
+                numeroVersion: 1
+                politica: null
+                baseHorarioId: null
+                configuracion:
+                  periodoId: 20261
+                  diasActivos: [1, 2, 3, 4, 5]
+                  inicioDiaMin: 480
+                  finDiaMin: 1230
+                  turnoMin: 50
+                  recesos: []
+                  pesos: { hueco: 1, piso: 2, edificio: 10, estabilidad: 5 }
+                  toleranciaHuecoMin: 0
+                  consecutivoMaxMin: 30
+                  timeoutSeg: 60
+                asignaciones:
+                  - { sesionId: 5001, profesorId: 1, aulaId: 301, dia: 1, inicioMin: 480, fijada: false, origen: automatica }
+                sinAsignar: [5003]
+                motivosSinAsignar:
+                  - { sesionId: 5003, cursoId: 10, profesoresConsiderados: [1], codigo: H04, detalle: Ningún aula tiene capacidad para los matriculados. }
+                violaciones: []
+                problemas: []
+                puntaje:
+                  total: 12
+                  sinAsignar: 1
+                  porRegla: [{ codigo: S01, costo: 8 }, { codigo: S02, costo: 4 }, { codigo: S07, costo: 0 }]
+                  porProfesor: [{ profesorId: 1, S01: 8, S02: 4, S07: 0 }]
+                alertas: []
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /horarios/generar:
+    post:
+      tags: [horarios]
+      summary: Lanza la generación asíncrona (coordinador)
+      description: |
+        - `modo: generar` sin `baseHorarioId` parte de cero.
+        - `modo: generar` con `baseHorarioId` regenera. `politica: conservar` (por defecto) mantiene las asignaciones
+          manuales y las fijadas y penaliza con S07 los cambios del resto; `politica: descartar` empieza de nuevo con
+          todas las fijaciones desactivadas.
+        - `modo: completar` exige `baseHorarioId`: conserva todas sus asignaciones y solo ubica las pendientes.
+        - `maxVersiones` (1 a 4, por defecto 1) pide alternativas ordenadas por costo con la misma cantidad de
+          sesiones asignadas que la primera. Cada versión se guarda como un borrador nuevo; nunca se sobrescribe otro.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GenerarEntrada' }
+            examples:
+              desdeCero:
+                value: { periodoId: 20261, modo: generar, maxVersiones: 2 }
+              completar:
+                value: { periodoId: 20261, modo: completar, baseHorarioId: 12 }
+      responses:
+        '202':
+          description: Trabajo aceptado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrabajoAceptado' }
+              example: { version: 1, jobId: 3, estado: pendiente }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '422': { $ref: '#/components/responses/EntradaInvalida' }
+
+  /trabajos/{jobId}:
+    parameters:
+      - name: jobId
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    get:
+      tags: [trabajos]
+      summary: Estado y resultado de un trabajo de generación (coordinador)
+      responses:
+        '200':
+          description: Trabajo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Trabajo' }
+              examples:
+                terminado:
+                  value:
+                    version: 1
+                    jobId: 3
+                    estado: terminado
+                    solicitud: { periodoId: 20261, modo: generar, baseHorarioId: null, politica: null, maxVersiones: 2 }
+                    creadoEn: '2026-11-23T22:00:00Z'
+                    actualizadoEn: '2026-11-23T22:00:02Z'
+                    resultado:
+                      tiempoMs: 1840
+                      versiones:
+                        - { numeroVersion: 1, estadoMotor: optimo, horarioId: 12 }
+                        - { numeroVersion: 2, estadoMotor: optimo, horarioId: 13 }
+                    error: null
+                error:
+                  value:
+                    version: 1
+                    jobId: 4
+                    estado: error
+                    solicitud: { periodoId: 20261, modo: completar, baseHorarioId: 12, politica: null, maxVersiones: 1 }
+                    creadoEn: '2026-11-23T22:05:00Z'
+                    actualizadoEn: '2026-11-23T22:05:01Z'
+                    resultado: null
+                    error: { codigo: SALIDA_MOTOR_INVALIDA, mensaje: El horario del motor contiene violaciones duras., detalles: [] }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /horarios/{id}/cambios:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [horarios]
+      summary: Crea, mueve, borra o fija asignaciones de un borrador (coordinador)
+      description: |
+        Los cambios se aplican en orden y se validan juntos. Con `simular=true` se devuelve el detalle resultante
+        sin guardar (previsualización de arrastre). Un borrador puede guardarse con violaciones duras.
+        Borrar una asignación deja la sesión pendiente. Crear o mover marca la asignación como `manual`.
+      parameters:
+        - name: simular
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CambiosEntrada' }
+            example:
+              cambios:
+                - { tipo: mover, sesionId: 5001, profesorId: 1, aulaId: 301, dia: 2, inicioMin: 530 }
+                - { tipo: fijar, sesionId: 5001, fijada: true }
+      responses:
+        '200':
+          description: Detalle del horario después de los cambios
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HorarioDetalle' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409': { $ref: '#/components/responses/Conflicto' }
+        '422': { $ref: '#/components/responses/EntradaInvalida' }
+
+  /horarios/{id}/publicar:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [horarios]
+      summary: Publica un borrador sin violaciones duras ni sesiones sin asignar (coordinador)
+      responses:
+        '200':
+          description: Horario publicado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HorarioDetalle' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+        '409':
+          description: |
+            `PUBLICACION_INVALIDA` con las violaciones (`{tipo: violacion, ...}`) y las sesiones pendientes
+            (`{tipo: sinAsignar, sesionId}`) en `detalles`, o `CAMBIO_CONCURRENTE`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/EntradaInvalida' }
+
+  /avisos:
+    get:
+      tags: [avisos]
+      summary: Avisos de cambios de disponibilidad sobre clases publicadas
+      description: El profesor recibe solo los suyos; el coordinador, todos.
+      parameters:
+        - $ref: '#/components/parameters/PeriodoIdFiltro'
+      responses:
+        '200':
+          description: Avisos, del más reciente al más antiguo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListaAvisos' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Token opaco devuelto por `POST /auth/login`. Expira según `expiraEn`.
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    PeriodoIdOpcional:
+      name: periodoId
+      in: query
+      required: false
+      description: Si se omite, se usa el período más reciente con configuración.
+      schema: { type: integer, minimum: 1 }
+    PeriodoIdFiltro:
+      name: periodoId
+      in: query
+      required: false
+      description: Filtra por período. Si se omite, no se filtra.
+      schema: { type: integer, minimum: 1 }
+
+  responses:
+    SolicitudInvalida:
+      description: '`SOLICITUD_INVALIDA`: JSON mal formado, campo faltante o con tipo incorrecto.'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { codigo: SOLICITUD_INVALIDA, mensaje: 'Falta el campo periodoId.', detalles: [] }
+    NoAutenticado:
+      description: '`NO_AUTENTICADO`: falta el token, es inválido o expiró; o las credenciales son incorrectas.'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { codigo: NO_AUTENTICADO, mensaje: Token inválido o expirado., detalles: [] }
+    Prohibido:
+      description: '`PROHIBIDO`: el rol no permite la operación o el recurso no es del profesor.'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { codigo: PROHIBIDO, mensaje: Operación reservada al coordinador., detalles: [] }
+    NoEncontrado:
+      description: '`NO_ENCONTRADO`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { codigo: NO_ENCONTRADO, mensaje: El recurso no existe., detalles: [] }
+    Conflicto:
+      description: |
+        `CONFLICTO` (el recurso está en uso o repite un valor único), `CAMBIO_CONCURRENTE` (otro cambio se guardó antes)
+        o `RESTRICCIONES_INCOMPATIBLES` (asignaciones conservadas que chocan entre sí; `detalles` lleva las violaciones).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    EntradaInvalida:
+      description: |
+        `ENTRADA_INVALIDA` (problemas estructurales del contexto o del horario; cada detalle es `{tipo: problema, codigo, detalle}`)
+        u `OPERACION_INVALIDA` (la operación no aplica al estado actual).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            codigo: ENTRADA_INVALIDA
+            mensaje: Los datos del período no son válidos.
+            detalles:
+              - { tipo: problema, codigo: DuracionInvalida, detalle: Duración inválida para la sesión 5001 }
+
+  schemas:
+    Version:
+      type: integer
+      enum: [1]
+      description: Versión del formato JSON.
+
+    Error:
+      type: object
+      required: [codigo, mensaje, detalles]
+      properties:
+        codigo:
+          type: string
+          description: |
+            Código estable. Valores: SOLICITUD_INVALIDA, NO_AUTENTICADO, PROHIBIDO, NO_ENCONTRADO, CONFLICTO,
+            CAMBIO_CONCURRENTE, ENTRADA_INVALIDA, OPERACION_INVALIDA, RESTRICCIONES_INCOMPATIBLES,
+            PUBLICACION_INVALIDA, MOTOR_TIEMPO_AGOTADO, MOTOR_FALLO, SALIDA_MOTOR_INVALIDA,
+            TRABAJO_INTERRUMPIDO, ERROR_INTERNO.
+        mensaje: { type: string }
+        detalles:
+          type: array
+          items: { type: object, additionalProperties: true }
+
+    Dia:
+      type: integer
+      minimum: 1
+      maximum: 7
+      description: 1 = lunes, ..., 7 = domingo.
+    Minuto:
+      type: integer
+      minimum: 0
+      maximum: 1440
+    Intervalo:
+      type: object
+      required: [inicioMin, finMin]
+      properties:
+        inicioMin: { $ref: '#/components/schemas/Minuto' }
+        finMin: { $ref: '#/components/schemas/Minuto' }
+    Franja:
+      type: object
+      required: [dia, inicioMin, finMin]
+      properties:
+        dia: { $ref: '#/components/schemas/Dia' }
+        inicioMin: { $ref: '#/components/schemas/Minuto' }
+        finMin: { $ref: '#/components/schemas/Minuto' }
+
+    Rol:
+      type: string
+      enum: [profesor, coordinador]
+    LoginSolicitud:
+      type: object
+      required: [usuario, contrasena]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        usuario: { type: string, minLength: 1 }
+        contrasena: { type: string, minLength: 1, format: password }
+    LoginRespuesta:
+      type: object
+      required: [version, token, rol, profesorId, expiraEn]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        token: { type: string }
+        rol: { $ref: '#/components/schemas/Rol' }
+        profesorId: { type: integer, nullable: true }
+        expiraEn: { type: string, format: date-time }
+
+    Categoria:
+      type: object
+      required: [id, nombre]
+      properties:
+        id: { type: integer, minimum: 1 }
+        nombre: { type: string }
+    CategoriaEntrada:
+      type: object
+      required: [nombre]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        nombre: { type: string, minLength: 1 }
+    CategoriaRespuesta:
+      allOf:
+        - { $ref: '#/components/schemas/Categoria' }
+        - type: object
+          required: [version]
+          properties:
+            version: { $ref: '#/components/schemas/Version' }
+    ListaCategorias:
+      type: object
+      required: [version, categorias]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        categorias:
+          type: array
+          items: { $ref: '#/components/schemas/Categoria' }
+
+    Profesor:
+      type: object
+      required: [id, nombre, categoriaId, cursosAptos, usuario]
+      properties:
+        id: { type: integer, minimum: 1 }
+        nombre: { type: string }
+        categoriaId: { type: integer, minimum: 1 }
+        cursosAptos:
+          type: array
+          description: Cursos para los que el coordinador habilitó al profesor.
+          items: { type: integer, minimum: 1 }
+        usuario:
+          type: string
+          nullable: true
+          description: Nombre de usuario para iniciar sesión, si tiene.
+    ProfesorEntrada:
+      type: object
+      required: [nombre, categoriaId]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        nombre: { type: string, minLength: 1 }
+        categoriaId: { type: integer, minimum: 1 }
+        cursosAptos:
+          type: array
+          items: { type: integer, minimum: 1 }
+        usuario: { type: string, minLength: 1 }
+        contrasena:
+          type: string
+          minLength: 8
+          format: password
+          description: Obligatoria si se envía `usuario`. Se guarda solo su hash con sal.
+    ProfesorRespuesta:
+      allOf:
+        - { $ref: '#/components/schemas/Profesor' }
+        - type: object
+          required: [version]
+          properties:
+            version: { $ref: '#/components/schemas/Version' }
+    ProfesorActualizacion:
+      type: object
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        nombre: { type: string, minLength: 1, description: Solo coordinador. }
+        categoriaId: { type: integer, minimum: 1, description: Solo coordinador. }
+        cursosAptos:
+          type: array
+          description: Solo coordinador. Reemplaza la lista completa.
+          items: { type: integer, minimum: 1 }
+        contrasena: { type: string, minLength: 8, format: password, description: Solo coordinador; requiere que el profesor tenga usuario. }
+        periodoId: { type: integer, minimum: 1, description: Obligatorio con `disponibilidad`. }
+        disponibilidad:
+          type: array
+          description: Solo el propio profesor. Reemplaza su disponibilidad del período.
+          items: { $ref: '#/components/schemas/Franja' }
+    ProfesorDetalle:
+      allOf:
+        - { $ref: '#/components/schemas/Profesor' }
+        - type: object
+          required: [version, periodoId, disponibilidad, propuestas, avisosGenerados]
+          properties:
+            version: { $ref: '#/components/schemas/Version' }
+            periodoId:
+              type: integer
+              nullable: true
+              description: Período consultado; null si no existe ninguna configuración.
+            disponibilidad:
+              type: array
+              nullable: true
+              description: Franjas normalizadas del período. `null` si el profesor no registró disponibilidad.
+              items: { $ref: '#/components/schemas/Franja' }
+            propuestas:
+              type: array
+              description: Propuestas pendientes y horarios docentes aprobados del período.
+              items: { $ref: '#/components/schemas/Propuesta' }
+            avisosGenerados:
+              type: array
+              description: Avisos creados por esta actualización de disponibilidad (vacío en un GET).
+              items: { $ref: '#/components/schemas/Aviso' }
+    ListaProfesores:
+      type: object
+      required: [version, profesores]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        profesores:
+          type: array
+          items: { $ref: '#/components/schemas/Profesor' }
+
+    EstadoPropuesta:
+      type: string
+      enum: [propuesto, aprobado]
+    Propuesta:
+      type: object
+      required: [id, profesorId, cursoId, periodoId, estado, franjas]
+      properties:
+        id: { type: integer, minimum: 1 }
+        profesorId: { type: integer, minimum: 1 }
+        cursoId: { type: integer, minimum: 1 }
+        periodoId: { type: integer, minimum: 1 }
+        estado: { $ref: '#/components/schemas/EstadoPropuesta' }
+        franjas:
+          type: array
+          items: { $ref: '#/components/schemas/Franja' }
+    PropuestaEntrada:
+      type: object
+      required: [cursoId, periodoId, franjas]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        cursoId: { type: integer, minimum: 1 }
+        periodoId: { type: integer, minimum: 1 }
+        franjas:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/Franja' }
+    PropuestaRespuesta:
+      allOf:
+        - { $ref: '#/components/schemas/Propuesta' }
+        - type: object
+          required: [version]
+          properties:
+            version: { $ref: '#/components/schemas/Version' }
+    ListaPropuestas:
+      type: object
+      required: [version, propuestas]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        propuestas:
+          type: array
+          items: { $ref: '#/components/schemas/Propuesta' }
+
+    Aula:
+      type: object
+      required: [id, codigo, capacidad, edificio, piso, tipo]
+      properties:
+        id: { type: integer, minimum: 1 }
+        codigo: { type: string }
+        capacidad: { type: integer, minimum: 0 }
+        edificio: { type: string, description: Texto; Haskell lo traduce a entero para el motor. }
+        piso: { type: integer }
+        tipo: { type: string, description: Tipo de aula; debe coincidir con `tipoAula` de la sesión (H07). }
+    AulaEntrada:
+      type: object
+      required: [codigo, capacidad, edificio, piso, tipo]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        codigo: { type: string, minLength: 1 }
+        capacidad: { type: integer, minimum: 0 }
+        edificio: { type: string, minLength: 1 }
+        piso: { type: integer }
+        tipo: { type: string, minLength: 1 }
+    AulaRespuesta:
+      allOf:
+        - { $ref: '#/components/schemas/Aula' }
+        - type: object
+          required: [version]
+          properties:
+            version: { $ref: '#/components/schemas/Version' }
+    ListaAulas:
+      type: object
+      required: [version, aulas]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        aulas:
+          type: array
+          items: { $ref: '#/components/schemas/Aula' }
+
+    Curso:
+      type: object
+      required: [id, codigo, nombre, categoriaId]
+      properties:
+        id: { type: integer, minimum: 1 }
+        codigo: { type: string }
+        nombre: { type: string }
+        categoriaId: { type: integer, minimum: 1 }
+    CursoEntrada:
+      type: object
+      required: [codigo, nombre, categoriaId]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        codigo: { type: string, minLength: 1 }
+        nombre: { type: string, minLength: 1 }
+        categoriaId: { type: integer, minimum: 1 }
+    CursoRespuesta:
+      allOf:
+        - { $ref: '#/components/schemas/Curso' }
+        - type: object
+          required: [version]
+          properties:
+            version: { $ref: '#/components/schemas/Version' }
+    ListaCursos:
+      type: object
+      required: [version, cursos]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        cursos:
+          type: array
+          items: { $ref: '#/components/schemas/Curso' }
+
+    Sesion:
+      type: object
+      required: [id, duracionMin, tipoAula, cerrada]
+      properties:
+        id: { type: integer, minimum: 1 }
+        duracionMin: { type: integer, minimum: 1, description: Múltiplo de `turnoMin`. }
+        tipoAula: { type: string }
+        cerrada: { type: boolean, description: Una sesión cerrada no participa en los horarios. }
+    SesionEntrada:
+      type: object
+      required: [duracionMin, tipoAula]
+      properties:
+        id: { type: integer, minimum: 1, description: Omitir para crear una sesión nueva. }
+        duracionMin: { type: integer, minimum: 1 }
+        tipoAula: { type: string, minLength: 1 }
+    Seccion:
+      type: object
+      required: [id, cursoId, periodoId, codigo, matriculados, grupos, sesiones]
+      properties:
+        id: { type: integer, minimum: 1 }
+        cursoId: { type: integer, minimum: 1 }
+        periodoId: { type: integer, minimum: 1 }
+        codigo: { type: string }
+        matriculados: { type: integer, minimum: 0 }
+        grupos:
+          type: array
+          description: Cohortes de alumnos (H05).
+          items: { type: integer, minimum: 1 }
+        sesiones:
+          type: array
+          items: { $ref: '#/components/schemas/Sesion' }
+    SeccionEntrada:
+      type: object
+      required: [periodoId, codigo, matriculados, grupos, sesiones]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        periodoId: { type: integer, minimum: 1 }
+        codigo: { type: string, minLength: 1 }
+        matriculados: { type: integer, minimum: 0 }
+        grupos:
+          type: array
+          items: { type: integer, minimum: 1 }
+        sesiones:
+          type: array
+          items: { $ref: '#/components/schemas/SesionEntrada' }
+    SeccionRespuesta:
+      allOf:
+        - { $ref: '#/components/schemas/Seccion' }
+        - type: object
+          required: [version]
+          properties:
+            version: { $ref: '#/components/schemas/Version' }
+    ListaSecciones:
+      type: object
+      required: [version, secciones]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        secciones:
+          type: array
+          items: { $ref: '#/components/schemas/Seccion' }
+
+    Pesos:
+      type: object
+      required: [hueco, piso, edificio, estabilidad]
+      properties:
+        hueco: { type: integer, minimum: 0 }
+        piso: { type: integer, minimum: 0 }
+        edificio: { type: integer, minimum: 0 }
+        estabilidad: { type: integer, minimum: 0 }
+    Configuracion:
+      type: object
+      required: [periodoId, diasActivos, inicioDiaMin, finDiaMin, turnoMin, recesos, pesos, toleranciaHuecoMin, consecutivoMaxMin, timeoutSeg]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        periodoId: { type: integer, minimum: 1 }
+        diasActivos:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/Dia' }
+        inicioDiaMin: { $ref: '#/components/schemas/Minuto' }
+        finDiaMin: { $ref: '#/components/schemas/Minuto' }
+        turnoMin:
+          type: integer
+          enum: [45, 50, 60, 90]
+        recesos:
+          type: array
+          description: Valen todos los días activos.
+          items: { $ref: '#/components/schemas/Intervalo' }
+        pesos: { $ref: '#/components/schemas/Pesos' }
+        toleranciaHuecoMin: { type: integer, minimum: 0, default: 0 }
+        consecutivoMaxMin: { type: integer, minimum: 0, default: 30 }
+        timeoutSeg: { type: integer, minimum: 1, description: El servidor lo limita a un máximo configurado. }
+    ConfiguracionRespuesta:
+      allOf:
+        - { $ref: '#/components/schemas/Configuracion' }
+        - type: object
+          required: [version]
+          properties:
+            version: { $ref: '#/components/schemas/Version' }
+
+    EstadoHorario:
+      type: string
+      enum: [borrador, publicado]
+    OrigenHorario:
+      type: string
+      enum: [manual, generado, regenerado, completado]
+    Politica:
+      type: string
+      enum: [conservar, descartar]
+    OrigenAsignacion:
+      type: string
+      enum: [manual, automatica]
+    Asignacion:
+      type: object
+      required: [sesionId, profesorId, aulaId, dia, inicioMin, fijada, origen]
+      properties:
+        sesionId: { type: integer, minimum: 1 }
+        profesorId: { type: integer, minimum: 1 }
+        aulaId: { type: integer, minimum: 1 }
+        dia: { $ref: '#/components/schemas/Dia' }
+        inicioMin: { $ref: '#/components/schemas/Minuto' }
+        fijada: { type: boolean }
+        origen: { $ref: '#/components/schemas/OrigenAsignacion' }
+    CodigoReglaDura:
+      type: string
+      enum: [H01, H02, H03, H04, H05, H06, H07, H08, H09]
+    CodigoReglaBlanda:
+      type: string
+      enum: [S01, S02, S07]
+    Violacion:
+      type: object
+      required: [codigo, sesiones, detalle]
+      properties:
+        codigo: { $ref: '#/components/schemas/CodigoReglaDura' }
+        sesiones:
+          type: array
+          items: { type: integer, minimum: 1 }
+        detalle: { type: string }
+    ProblemaEstructural:
+      type: object
+      required: [codigo, detalle]
+      properties:
+        codigo:
+          type: string
+          enum: [ConfiguracionInvalida, IdentificadorInvalido, IdentificadorDuplicado, ReferenciaInvalida, DuracionInvalida, DisponibilidadInvalida]
+        detalle: { type: string }
+    MotivoSinAsignar:
+      type: object
+      required: [sesionId, cursoId, profesoresConsiderados, codigo, detalle]
+      properties:
+        sesionId: { type: integer, minimum: 1 }
+        cursoId: { type: integer, minimum: 1 }
+        profesoresConsiderados:
+          type: array
+          items: { type: integer, minimum: 1 }
+        codigo:
+          allOf:
+            - { $ref: '#/components/schemas/CodigoReglaDura' }
+          nullable: true
+          description: Regla que explica el motivo, si la hay.
+        detalle: { type: string }
+    CostoPorRegla:
+      type: object
+      required: [codigo, costo]
+      properties:
+        codigo: { $ref: '#/components/schemas/CodigoReglaBlanda' }
+        costo: { type: integer, minimum: 0 }
+    CostoPorProfesor:
+      type: object
+      required: [profesorId, S01, S02, S07]
+      properties:
+        profesorId: { type: integer, minimum: 1 }
+        S01: { type: integer, minimum: 0 }
+        S02: { type: integer, minimum: 0 }
+        S07: { type: integer, minimum: 0 }
+    Puntaje:
+      type: object
+      required: [total, sinAsignar, porRegla, porProfesor]
+      properties:
+        total: { type: integer, minimum: 0, description: Solo costo blando (S01 + S02 + S07). }
+        sinAsignar: { type: integer, minimum: 0, description: Cantidad de sesiones pendientes. }
+        porRegla:
+          type: array
+          items: { $ref: '#/components/schemas/CostoPorRegla' }
+        porProfesor:
+          type: array
+          items: { $ref: '#/components/schemas/CostoPorProfesor' }
+    Aviso:
+      type: object
+      required: [id, horarioId, sesionId, profesorId, aulaId, dia, inicioMin, creadoEn]
+      properties:
+        id:
+          type: integer
+          nullable: true
+          description: Null en las alertas vigentes calculadas al consultar un horario.
+        horarioId: { type: integer, minimum: 1 }
+        sesionId: { type: integer, minimum: 1 }
+        profesorId: { type: integer, minimum: 1 }
+        aulaId: { type: integer, minimum: 1 }
+        dia: { $ref: '#/components/schemas/Dia' }
+        inicioMin: { $ref: '#/components/schemas/Minuto' }
+        creadoEn: { type: string, format: date-time, nullable: true }
+    ListaAvisos:
+      type: object
+      required: [version, avisos]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        avisos:
+          type: array
+          items: { $ref: '#/components/schemas/Aviso' }
+
+    HorarioResumen:
+      type: object
+      required: [id, periodoId, estado, origen, numeroVersion, politica, baseHorarioId, cantidadAsignaciones, cantidadSinAsignar, creadoEn]
+      properties:
+        id: { type: integer, minimum: 1 }
+        periodoId: { type: integer, minimum: 1 }
+        estado: { $ref: '#/components/schemas/EstadoHorario' }
+        origen: { $ref: '#/components/schemas/OrigenHorario' }
+        numeroVersion:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 4
+          description: Posición de la versión dentro de su generación. Null en horarios manuales.
+        politica:
+          allOf:
+            - { $ref: '#/components/schemas/Politica' }
+          nullable: true
+        baseHorarioId: { type: integer, nullable: true }
+        cantidadAsignaciones: { type: integer, minimum: 0 }
+        cantidadSinAsignar: { type: integer, minimum: 0 }
+        creadoEn: { type: string, format: date-time }
+    ListaHorarios:
+      type: object
+      required: [version, horarios]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        horarios:
+          type: array
+          items: { $ref: '#/components/schemas/HorarioResumen' }
+    HorarioDetalle:
+      type: object
+      required: [version, id, periodoId, estado, origen, numeroVersion, politica, baseHorarioId, configuracion, asignaciones, sinAsignar, motivosSinAsignar, violaciones, problemas, puntaje, alertas]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        id: { type: integer, minimum: 1 }
+        periodoId: { type: integer, minimum: 1 }
+        estado: { $ref: '#/components/schemas/EstadoHorario' }
+        origen: { $ref: '#/components/schemas/OrigenHorario' }
+        numeroVersion: { type: integer, nullable: true, minimum: 1, maximum: 4 }
+        politica:
+          allOf:
+            - { $ref: '#/components/schemas/Politica' }
+          nullable: true
+        baseHorarioId: { type: integer, nullable: true }
+        configuracion: { $ref: '#/components/schemas/Configuracion' }
+        asignaciones:
+          type: array
+          items: { $ref: '#/components/schemas/Asignacion' }
+        sinAsignar:
+          type: array
+          description: IDs de las sesiones abiertas del período que no tienen asignación.
+          items: { type: integer, minimum: 1 }
+        motivosSinAsignar:
+          type: array
+          items: { $ref: '#/components/schemas/MotivoSinAsignar' }
+        violaciones:
+          type: array
+          items: { $ref: '#/components/schemas/Violacion' }
+        problemas:
+          type: array
+          description: Problemas estructurales (referencias desconocidas, duplicados).
+          items: { $ref: '#/components/schemas/ProblemaEstructural' }
+        puntaje: { $ref: '#/components/schemas/Puntaje' }
+        alertas:
+          type: array
+          description: Clases publicadas que hoy quedan fuera de la disponibilidad del profesor.
+          items: { $ref: '#/components/schemas/Aviso' }
+    HorarioVacioEntrada:
+      type: object
+      required: [periodoId]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        periodoId: { type: integer, minimum: 1 }
+
+    ModoGeneracion:
+      type: string
+      enum: [generar, completar]
+    GenerarEntrada:
+      type: object
+      required: [periodoId]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        periodoId: { type: integer, minimum: 1 }
+        modo:
+          allOf:
+            - { $ref: '#/components/schemas/ModoGeneracion' }
+          default: generar
+        baseHorarioId: { type: integer, minimum: 1, description: Obligatorio con `modo` completar. }
+        politica:
+          allOf:
+            - { $ref: '#/components/schemas/Politica' }
+          default: conservar
+          description: Solo con `modo` generar y `baseHorarioId`.
+        maxVersiones: { type: integer, minimum: 1, maximum: 4, default: 1 }
+    EstadoTrabajo:
+      type: string
+      enum: [pendiente, ejecutando, terminado, error]
+    TrabajoAceptado:
+      type: object
+      required: [version, jobId, estado]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        jobId: { type: integer, minimum: 1 }
+        estado: { $ref: '#/components/schemas/EstadoTrabajo' }
+    VersionGenerada:
+      type: object
+      required: [numeroVersion, estadoMotor, horarioId]
+      properties:
+        numeroVersion: { type: integer, minimum: 1, maximum: 4 }
+        estadoMotor:
+          type: string
+          enum: [optimo, factible]
+        horarioId: { type: integer, minimum: 1 }
+    Trabajo:
+      type: object
+      required: [version, jobId, estado, solicitud, creadoEn, actualizadoEn, resultado, error]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        jobId: { type: integer, minimum: 1 }
+        estado: { $ref: '#/components/schemas/EstadoTrabajo' }
+        solicitud:
+          type: object
+          required: [periodoId, modo, baseHorarioId, politica, maxVersiones]
+          properties:
+            periodoId: { type: integer }
+            modo: { $ref: '#/components/schemas/ModoGeneracion' }
+            baseHorarioId: { type: integer, nullable: true }
+            politica:
+              allOf:
+                - { $ref: '#/components/schemas/Politica' }
+              nullable: true
+            maxVersiones: { type: integer }
+        creadoEn: { type: string, format: date-time }
+        actualizadoEn: { type: string, format: date-time }
+        resultado:
+          type: object
+          nullable: true
+          required: [tiempoMs, versiones]
+          properties:
+            tiempoMs: { type: integer, minimum: 0 }
+            versiones:
+              type: array
+              items: { $ref: '#/components/schemas/VersionGenerada' }
+        error:
+          allOf:
+            - { $ref: '#/components/schemas/Error' }
+          nullable: true
+
+    CambioAsignacion:
+      type: object
+      required: [tipo, sesionId]
+      description: |
+        - `crear` y `mover` exigen `profesorId`, `aulaId`, `dia` e `inicioMin`.
+        - `borrar` solo exige `sesionId`.
+        - `fijar` exige `fijada`.
+      properties:
+        tipo:
+          type: string
+          enum: [crear, mover, borrar, fijar]
+        sesionId: { type: integer, minimum: 1 }
+        profesorId: { type: integer, minimum: 1 }
+        aulaId: { type: integer, minimum: 1 }
+        dia: { $ref: '#/components/schemas/Dia' }
+        inicioMin: { $ref: '#/components/schemas/Minuto' }
+        fijada: { type: boolean }
+    CambiosEntrada:
+      type: object
+      required: [cambios]
+      properties:
+        version: { $ref: '#/components/schemas/Version' }
+        cambios:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/CambioAsignacion' }
