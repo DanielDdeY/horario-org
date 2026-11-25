@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "estado": "optimo",
+  "tiempoMs": 0,
+  "versiones": [
+    {
+      "costo": 69,
+      "asignaciones": [
+        {"sesionId": 1, "profesorId": 1, "aulaId": 301, "dia": 1, "inicioMin": 480},
+        {"sesionId": 2, "profesorId": 1, "aulaId": 302, "dia": 1, "inicioMin": 600},
+        {"sesionId": 3, "profesorId": 2, "aulaId": 303, "dia": 2, "inicioMin": 480}
+      ],
+      "sinAsignar": [4, 5]
+    }
+  ]
+}
